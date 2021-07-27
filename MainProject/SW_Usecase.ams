@@ -1,0 +1,322 @@
+## ams_version=1.0
+
+Model Main_SW_Usecase {
+	Section ExcelImport {
+		StringParameter WorkbookName;
+		Procedure ReadFromExcel {
+			Body: {
+				!if not FileSelect(WorkbookName,extension:".xlsx") then
+				!	return;
+				!endif;
+				
+				WorkbookName:= "InitialData.xlsx";
+				
+				axll::CloseAllWorkBooks;
+				axll::OpenWorkBook(WorkbookName);
+				
+				axll::SelectSheet("Location Type");
+				!change P_LocationType to the name of your own parameter
+				axll::ReadList(P_LocationType,"A2:B200","C2:C200",ModeForUnknownElements :  1); 
+				
+				axll::SelectSheet("Distances Between Locations");
+				!change P_DistanceBetweenLocations to the name of your own parameter
+				axll::ReadTable(P_DistanceBetweenLocations, "A2:A200", "B1:DR1", "B2:DR200", 1);
+				
+				axll::SelectSheet("Demand");
+				!change P_Demand to the name of your own parameter
+				axll::ReadList(P_Demand,"A2:B200","C2:C200",ModeForUnknownElements :  1); 
+				
+				axll::SelectSheet("Supply");
+				!change P_Supply to the name of your own parameter
+				axll::ReadList(P_Supply,"A2:A100","B2:B100",ModeForUnknownElements :  1); 
+				
+				axll::SelectSheet("Stock");
+				!change P_xxxStock to the name of your own parameter
+				axll::ReadList(P_MinStock,"A2:A100","B2:B100",ModeForUnknownElements :  1);
+				axll::ReadList(P_MaxStock,"A2:A100","C2:C100",ModeForUnknownElements :  1);
+				axll::ReadList(P_StartStock,"A2:A100","E2:E100",ModeForUnknownElements :  1);
+				
+				axll::SelectSheet("Coordinates");
+				
+				axll::ReadList(P_Longitude,"A2:A200","B2:B200",ModeForUnknownElements :  1);
+				axll::ReadList(P_Latitude,"A2:A200","C2:C200",ModeForUnknownElements :  1);
+				axll::ReadList(P_Population,"A2:A200","D2:D200",ModeForUnknownElements :  1);
+				
+				axll::CloseAllWorkBooks;
+			}
+		}
+	}
+	Section DatabaseImport {
+		DatabaseTable DB_Cities {
+			DataSource: {
+				"DRIVER=SQLite3 ODBC Driver;Database=Cities.db;"
+			}
+			TableName: "simplemaps-worldcities-basic";
+			Mapping: {
+				"city" -->l,
+				"lat"  -->P_Latitude,
+				"lng"  -->P_Longitude,
+				"pop"  -->P_Population
+			}
+		}
+		Procedure Database_Import {
+			Body: {
+				empty InitialData;
+				!read from table DB_Cities;
+				read from table DB_SQL_Import;
+			}
+		}
+		DatabaseProcedure DB_SQL_Import {
+			DataSource: {
+				"DRIVER=SQLite3 ODBC Driver;Database=Cities.db;"
+			}
+			SqlQuery: "SELECT * FROM `simplemaps-worldcities-basic` WHERE (pop > 300000 and lat > 40 and lat < 70 and lng > -20 and lng < 20)";
+			Property: UseResultSet;
+			Mapping: {
+				"city" -->l,
+				"lat"  -->P_Latitude,
+				"lng"  -->P_Longitude,
+				"pop"  -->P_Population
+			}
+		}
+	}
+	Section InitialData {
+		Procedure PR_split_factory_ndc {
+			Body: {
+				Database_Import;
+				
+				! Initialize no factory
+				P_LocationType(l, 'Factory') := 0;
+				
+				! The rest of the locations should be all RDCs
+				P_LocationType(l, 'RDC') := 1;
+				
+				Option seed = 35; ! You can freely pick any number here
+				
+				S_subLocations := S_Locations;
+				
+				! choose randomly 5 factories
+				while sum(l, P_LocationType(l, 'Factory')) < 5 do
+				      EP_Location := Element( S_subLocations, round(uniform(0.5,card(S_Locations)+0.5)));
+				      P_LocationType(EP_Location, 'Factory') :=1;
+				      P_LocationType(EP_Location, 'RDC') := 0;
+				      S_subLocations -= EP_Location;
+				endwhile;
+				
+				! choose randomly 3 NDCs
+				while sum(l, P_LocationType(l, 'NDC')) < 3 do
+				      EP_Location := Element( S_subLocations, round(uniform(0.5,card(S_Locations)+0.5)));
+				      P_LocationType(EP_Location, 'NDC') :=1;
+				      S_subLocations -= EP_Location;
+				endwhile;
+			}
+			ElementParameter EP_Location {
+				Range: S_Locations;
+			}
+		}
+		Procedure PR_Generate_Demand_Supply_Distances {
+			Body: {
+				P_Scale := 1/1000;
+				Empty P_Demand, P_Supply;
+				S_Time := {'Monday'}; !'Tuesday', 'Wednesday'};
+				
+				P_Demand(l, t) := round(P_Population(l) *(1 + uniform(-0.1,0.1))*P_Scale);
+				
+				P_Supply(l) | P_LocationType(l, 'Factory') := max(t,sum((l2),P_Demand(l2, t))) / (sum(l2, P_LocationType(l2, 'Factory'))*card(S_Time));
+				
+				P_DistanceBetweenLocations(l, l2) := sqrt(((P_Latitude(l) - P_Latitude(l2)) * 111.320 * cos(radians(1/2 * (P_Latitude(l) + P_Latitude(l2)))))^2 + ((P_Latitude(l) - P_Latitude(l2)) * 110.574 )^2) *1;
+			}
+			Parameter P_Scale;
+		}
+		Set S_Locations {
+			Index: l, l2;
+			webui::AnnotationsIdentifier: SP_LocationType;
+		}
+		Set S_subLocations {
+			SubsetOf: S_Locations;
+		}
+		StringParameter SP_LocationType {
+			IndexDomain: l;
+			Definition: {
+				if P_LocationType(l, 'Factory') then
+					"Factory"
+				elseif P_LocationType(l, 'NDC') then
+					"NDC"
+				elseif P_LocationType(l, 'RDC') then
+					"RDC"
+				endif;
+			}
+		}
+		Set S_LocationTypes {
+			Index: typ;
+			Definition: {
+				{'Factory', 'NDC', 'RDC'}
+			}
+		}
+		Set S_Time {
+			Index: t;
+		}
+		Parameter P_LocationType {
+			IndexDomain: (l,typ);
+			Range: binary;
+		}
+		Parameter P_DistanceBetweenLocations {
+			IndexDomain: (l,l2);
+		}
+		Parameter P_Demand {
+			IndexDomain: (l,t);
+		}
+		Parameter P_Supply {
+			IndexDomain: l;
+		}
+		Parameter P_MinStock {
+			IndexDomain: l;
+		}
+		Parameter P_MaxStock {
+			IndexDomain: l;
+		}
+		Parameter P_StartStock {
+			IndexDomain: l;
+		}
+		Parameter P_UnitTransportCost {
+			IndexDomain: (l,l2);
+			Definition: {
+				if P_LocationType(l, 'Factory') and P_LocationType(l2, 'NDC') then
+					0.8
+				elseif P_LocationType(l, 'NDC') and P_LocationType(l2, 'RDC') then
+					1.2
+				else
+					0
+				endif;
+			}
+		}
+		Parameter P_Latitude {
+			IndexDomain: l;
+		}
+		Parameter P_Longitude {
+			IndexDomain: l;
+		}
+		Parameter P_Population {
+			IndexDomain: l;
+		}
+	}
+	Section MathModel {
+		Parameter P_DomainCondition {
+			IndexDomain: (l,l2);
+			Definition: {
+				P_LocationType(l, 'Factory') and P_LocationType(l2, 'NDC') ! primary flow
+				or 
+				P_LocationType(l, 'NDC') and P_LocationType(l2, 'RDC') ! secondary flow
+			}
+		}
+		Variable V_T {
+			IndexDomain: (l,l2,t) | P_DomainCondition(l, l2);
+			Range: nonnegative;
+		}
+		Variable V_Production {
+			IndexDomain: (l,t) | P_LocationType(l, 'Factory');
+			Range: nonnegative;
+		}
+		Constraint NodeEquilibrium {
+			IndexDomain: (l,t);
+			Definition: V_Production(l, t) + sum(l2,V_T(l2, l, t)) = sum(l2,V_T(l, l2, t)) + P_Demand(l, t);
+		}
+		Variable ObjectiveFunction {
+			Range: free;
+			Definition: sum((l,l2,t),V_T(l, l2, t)*P_DistanceBetweenLocations(l, l2)*P_UnitTransportCost(l, l2));
+		}
+		MathematicalProgram MinimizeCost {
+			Objective: ObjectiveFunction;
+			Direction: minimize;
+			Constraints: AllConstraints;
+			Variables: AllVariables;
+			Type: Automatic;
+		}
+	}
+	Section WebUI_Support {
+		StringParameter SP_PrimaryAction {
+			IndexDomain: webui::indexPageActionSpec;
+		}
+		Parameter P_centerLongitude {
+			Definition: mean(l,P_Longitude(l));
+		}
+		Parameter P_centerLatitude {
+			Definition: mean(l,P_Latitude(l));
+		}
+	}
+	Procedure MainInitialization {
+		Comment: "Add initialization statements here that do NOT require any library being initialized already.";
+	}
+	Procedure PostMainInitialization {
+		Body: {
+			!ReadFromExcel;
+			PR_split_factory_ndc;
+			PR_Generate_Demand_Supply_Distances;
+			SP_PrimaryAction(webui::indexPageActionSpec) := data { displaytext : "Optimize",  procedure : "MainExecution",  state : "Active" };
+		}
+		Comment: {
+			"Add initialization statements here that require that the libraries are already initialized properly,
+			or add statements that require the Data Management module to be initialized."
+		}
+	}
+	Procedure MainExecution {
+		Body: {
+			if not ProjectDeveloperMode then
+				if pro::DelegateToServer(
+					completionCallback: 'pro::session::LoadResultsCallback',
+					waitForCompletion:1) then
+						return;
+					endif;
+			endif;
+			
+			solve MinimizeCost;
+		}
+		Comment: {
+			"if not ProjectDeveloperMode then
+				if pro::DelegateToServer(
+					completionCallback: \'pro::session::LoadResultsCallback\',
+					waitForCompletion:1) then
+						return;
+					endif;
+			endif;"
+		}
+	}
+	Procedure PreMainTermination {
+		Body: {
+			return DataManagementExit();
+		}
+		Comment: {
+			"Add termination statements here that require all libraries to be still alive.
+			Return 1 if you allow the termination sequence to continue.
+			Return 0 if you want to cancel the termination sequence."
+		}
+	}
+	Procedure MainTermination {
+		Body: {
+			return 1;
+		}
+		Comment: {
+			"Add termination statements here that do not require all libraries to be still alive.
+			Return 1 to allow the termination sequence to continue.
+			Return 0 if you want to cancel the termination sequence.
+			It is recommended to only use the procedure PreMainTermination to cancel the termination sequence and let this procedure always return 1."
+		}
+	}
+	Section Quantities_and_Units {
+		Comment: {
+			"This section contains all the units and quantities that are added automatically by AIMMS.
+			It is recommended to declare all your quantities here."
+		}
+		Quantity SI_Time_Duration {
+			BaseUnit: s;
+			Conversions: minute->s : #-># * 60;
+			Comment: {
+				"Expresses the value for the duration of periods.
+				
+				The unit s has been added automatically because it is a required unit for AimmsWebUI.
+				
+				The unit minute has been added automatically because it is a required unit for AimmsWebUI."
+			}
+		}
+	}
+}
