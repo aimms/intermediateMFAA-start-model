@@ -124,9 +124,22 @@ Model Main_SW_Usecase {
 				
 				P_Supply(l) | P_LocationType(l, 'Factory') := max(t,sum((l2),P_Demand(l2, t))) / (sum(l2, P_LocationType(l2, 'Factory'))*card(S_Time));
 				
-				P_DistanceBetweenLocations(l, l2) := sqrt(((P_Latitude(l) - P_Latitude(l2)) * 111.320 * cos(radians(1/2 * (P_Latitude(l) + P_Latitude(l2)))))^2 + ((P_Latitude(l) - P_Latitude(l2)) * 110.574 )^2) *1;
+				! Haversine formula
+				lat(l) := (3.14/180)*P_Latitude(l);
+				lon(l) := (3.14/180)*P_Longitude(l);
+				a(l, l2) := sin((lat(l)-lat(l2))/2)^2+cos(lat(l))*cos(lat(l2))*sin((lon(l)-lon(l2))/2)^2;
+				P_DistanceBetweenLocations(l, l2) := 6378*2*arctan(sqrt(a(l, l2))/sqrt(1-a(l, l2)));
 			}
 			Parameter P_Scale;
+			Parameter lat {
+				IndexDomain: l;
+			}
+			Parameter lon {
+				IndexDomain: l;
+			}
+			Parameter a {
+				IndexDomain: (l,l2);
+			}
 		}
 		Set S_Locations {
 			Index: l, l2;
