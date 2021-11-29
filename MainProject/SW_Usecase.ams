@@ -215,7 +215,7 @@ Model Main_SW_Usecase {
 		}
 		Variable V_Production {
 			IndexDomain: (l,t) | P_LocationType(l, 'Factory');
-			Range: nonnegative;
+			Range: [0, P_Supply(l)];
 		}
 		Constraint NodeEquilibrium {
 			IndexDomain: (l,t);
